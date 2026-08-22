@@ -124,15 +124,15 @@ app.get(['/', '/api/health'], (req, res) => {
 });
 
 // Fallback AI Models for OpenRouter to ensure high availability
-// All models are free-tier on OpenRouter
+// Primary is OpenRouter's auto-router: it picks a random healthy free model,
+// so individual model outages never surface as errors to users.
 const FALLBACK_AI_MODELS = [
   'openrouter/free',
+  // Direct fallbacks, used only if the router endpoint itself fails.
   'google/gemma-4-31b-it:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
-  'openai/gpt-oss-20b:free',
   'cohere/north-mini-code:free',
   'google/gemma-4-26b-a4b-it:free',
-  'inclusionai/ling-3.0-flash:free',
   'nvidia/nemotron-3-nano-30b-a3b:free',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
