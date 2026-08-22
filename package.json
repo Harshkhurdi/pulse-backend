@@ -1,7 +1,7 @@
 {
   "name": "pulse-backend",
   "engines": {
-    "node": "22.x"
+    "node": "24.x"
   },
   "version": "1.0.0",
   "main": "index.js",
