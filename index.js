@@ -199,6 +199,9 @@ Respond with ONLY valid JSON and nothing else — no markdown, no code fences �
           max_tokens: 1000,
           messages: [{ role: 'user', content: prompt }],
         }),
+        // Hard per-model budget: a hanging provider must never eat the
+        // whole function duration — skip to the next model instead.
+        signal: AbortSignal.timeout(20_000),
       });
 
       if (!response.ok) {
