@@ -3,7 +3,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const { createClient } = require('@supabase/supabase-js');
+const { createRemoteJWKSet, jwtVerify } = require('jose');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,27 +23,15 @@ function configured(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-// The service-role key is preferred, but an anon key is sufficient for the
-// only Supabase operation this API performs: validating a caller's JWT.
-// Supporting the alias makes the deployment less fragile without exposing a
-// privileged database key to a function that does not need one.
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+// Firebase ID tokens are JWTs signed with Google's rotating private keys and
+// are publicly verifiable against Google's JWKS endpoint — no service-account
+// private key is needed for the only operation this API performs: validating
+// a caller's token. The project id scopes issuer and audience checks.
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
 const configIssues = [];
 
-if (!configured(process.env.SUPABASE_URL)) {
-  configIssues.push('SUPABASE_URL');
-} else {
-  try {
-    const supabaseUrl = new URL(process.env.SUPABASE_URL);
-    if (!['https:', 'http:'].includes(supabaseUrl.protocol)) {
-      configIssues.push('SUPABASE_URL (must start with https:// or http://)');
-    }
-  } catch {
-    configIssues.push('SUPABASE_URL (must be a valid URL)');
-  }
-}
-if (!configured(supabaseKey)) {
-  configIssues.push('SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY');
+if (!configured(FIREBASE_PROJECT_ID)) {
+  configIssues.push('FIREBASE_PROJECT_ID');
 }
 if (!configured(process.env.OPENROUTER_API_KEY)) {
   configIssues.push('OPENROUTER_API_KEY');
@@ -54,23 +42,21 @@ for (const issue of configIssues) {
   console.error(`CRITICAL: Invalid or missing server environment variable — ${issue}.`);
 }
 
-let supabaseAdmin;
-if (envOk) {
-  try {
-    supabaseAdmin = createClient(
-      process.env.SUPABASE_URL,
-      supabaseKey,
-      { auth: { persistSession: false } }
-    );
-  } catch (err) {
-    console.error('CRITICAL: Failed to create Supabase client:', err.message);
-    // `createClient` validates URL/key shape more strictly than the initial
-    // presence check. Include a safe, actionable diagnosis in health output;
-    // neither the URL nor any secret is ever returned.
-    configIssues.push('SUPABASE_URL or Supabase API key is invalid');
-    envOk = false;
-  }
-} else {
+// Google's JWKS for Firebase ID tokens (securetoken service account).
+const firebaseJWKS = createRemoteJWKSet(
+  new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
+);
+
+async function verifyFirebaseToken(token) {
+  const { payload } = await jwtVerify(token, firebaseJWKS, {
+    issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`,
+    audience: FIREBASE_PROJECT_ID,
+  });
+  // payload.user_id is the Firebase uid; email is present for password accounts.
+  return payload;
+}
+
+if (!envOk) {
   console.error('CRITICAL: Server starting with invalid environment configuration. Configure the deployment environment variables.');
 }
 
@@ -123,17 +109,17 @@ app.get(['/', '/api/health'], (req, res) => {
   });
 });
 
-// Fallback AI Models for OpenRouter to ensure high availability
-// Primary is OpenRouter's auto-router: it picks a random healthy free model,
-// so individual model outages never surface as errors to users.
+// Primary model — ALWAYS tried first on every /api/generate-update call.
+// OpenRouter's auto-router picks a healthy free model, so individual model
+// outages never surface as errors to users.
+const PRIMARY_AI_MODEL = 'openrouter/free';
+
+// Direct fallbacks, used in order only if the primary fails.
 const FALLBACK_AI_MODELS = [
-  'openrouter/free',
-  // Direct fallbacks, used only if the router endpoint itself fails.
   'google/gemma-4-31b-it:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
   'cohere/north-mini-code:free',
   'google/gemma-4-26b-a4b-it:free',
-  'nvidia/nemotron-3-nano-30b-a3b:free',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
   'nvidia/nemotron-nano-12b-v2-vl:free',
@@ -142,9 +128,11 @@ const FALLBACK_AI_MODELS = [
   'poolside/laguna-xs-2.1:free',
 ];
 
+const AI_MODELS = [PRIMARY_AI_MODEL, ...FALLBACK_AI_MODELS];
+
 
 app.post('/api/generate-update', async (req, res) => {
-  if (!envOk || !supabaseAdmin) {
+  if (!envOk) {
     return res.status(503).json({
       error: 'Backend configuration error. Configure the server environment variables and redeploy.',
       configurationIssues: configIssues,
@@ -157,12 +145,11 @@ app.post('/api/generate-update', async (req, res) => {
   }
 
   const token = authHeader.split(' ')[1];
-  const {
-    data: { user },
-    error: authError,
-  } = await supabaseAdmin.auth.getUser(token);
 
-  if (authError || !user) {
+  try {
+    await verifyFirebaseToken(token);
+  } catch (err) {
+    console.warn('Firebase token verification failed:', err?.code || err?.message);
     return res.status(401).json({ error: 'Unauthorized. Invalid or expired token.' });
   }
 
@@ -185,9 +172,9 @@ Respond with ONLY valid JSON and nothing else — no markdown, no code fences �
 
   let lastError = null;
 
-  for (const model of FALLBACK_AI_MODELS) {
+  for (const model of AI_MODELS) {
     try {
-      console.log(`[AI Request] Attempting status generation with model: ${model}`);
+      console.log(`[AI Request] Attempting status generation with model: ${model}${model === PRIMARY_AI_MODEL ? ' (primary)' : ' (fallback)'}`);
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -231,6 +218,7 @@ Respond with ONLY valid JSON and nothing else — no markdown, no code fences �
       }
 
       const parsed = JSON.parse(textBlocks.slice(startIdx, endIdx + 1).trim());
+      console.log(`[AI Request] Status generated with model: ${model} (${model === PRIMARY_AI_MODEL ? 'primary' : 'fallback'})`);
       return res.json(parsed);
     } catch (err) {
       console.error(`Error trying model ${model}:`, err.message);

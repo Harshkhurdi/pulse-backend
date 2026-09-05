@@ -1,6 +1,6 @@
 # Pulse Backend API
 
-Pulse Backend is a serverless-ready Node.js & Express API that interfaces with Supabase Auth/Database and OpenRouter AI to generate executive status updates for task boards with multi-model fallback.
+Pulse Backend is a serverless-ready Node.js & Express API that verifies Firebase Authentication ID tokens and interfaces with OpenRouter AI to generate executive status updates for task boards with multi-model fallback.
 
 ---
 
@@ -20,9 +20,7 @@ cp .env.example .env
 Edit `.env` and fill in your keys:
 ```env
 PORT=3001
-SUPABASE_URL=https://your-supabase-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-# Or, for this auth-only API: SUPABASE_ANON_KEY=your-supabase-anon-key
+FIREBASE_PROJECT_ID=your-firebase-project-id
 OPENROUTER_API_KEY=your-openrouter-api-key
 ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000
 ```
@@ -38,7 +36,7 @@ The server will start on `http://localhost:3001`.
 ## 🛠️ API Endpoints
 
 - **`GET /` & `GET /api/health`** — Health check endpoint returning status, timestamp, and whether required deployment configuration is valid. When configuration is missing, it lists variable names only (never values).
-- **`POST /api/generate-update`** — Authenticated endpoint expecting a Supabase JWT Bearer token in the `Authorization` header. Takes `{ boardText, today }` payload and generates JSON status update using OpenRouter multi-model fallback (`openrouter/free`, `nvidia/nemotron-3-super-120b-a12b:free`, `meta-llama/llama-3.3-70b-instruct:free`, `google/gemini-2.0-flash-lite-001`, `deepseek/deepseek-r1:free`, `openai/gpt-4o-mini`).
+- **`POST /api/generate-update`** — Authenticated endpoint expecting a Firebase ID token Bearer token in the `Authorization` header. The token is verified against Google's public JWKS endpoint (issuer `https://securetoken.google.com/<project-id>`, audience = project id), so no service-account private key is required. Takes `{ boardText, today }` payload and generates JSON status update using OpenRouter multi-model fallback.
 
 ---
 
@@ -49,8 +47,7 @@ The server will start on `http://localhost:3001`.
 
 2. **Configure Environment Variables**:
    Add the following variables in Vercel Project Settings:
-   - `SUPABASE_URL`: Your Supabase Project URL
-   - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase Service Role Key (or `SUPABASE_ANON_KEY`; the API only validates user JWTs)
+   - `FIREBASE_PROJECT_ID`: Your Firebase project id (e.g. `pulse-app-b2bd6`)
    - `OPENROUTER_API_KEY`: Your OpenRouter API Key
    - `ALLOWED_ORIGINS`: Exact frontend origins, e.g. `https://your-frontend.vercel.app,http://localhost:5173`. Do not leave this unset in production.
 
