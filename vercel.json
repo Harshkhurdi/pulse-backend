@@ -1,10 +1,14 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.js" }
+    { "source": "/api/health", "destination": "/index.js?__path=/api/health" },
+    { "source": "/api/generate-update", "destination": "/index.js?__path=/api/generate-update" },
+    { "source": "/favicon.ico", "destination": "/index.js?__path=/favicon.ico" },
+    { "source": "/favicon.png", "destination": "/index.js?__path=/favicon.png" },
+    { "source": "/", "destination": "/index.js?__path=/" }
   ],
   "functions": {
     "index.js": {
-      "maxDuration": 10
+      "maxDuration": 60
     }
   }
 }

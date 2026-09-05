@@ -11,6 +11,17 @@ const PORT = process.env.PORT || 3001;
 // Trust Vercel's proxy so express-rate-limit can read X-Forwarded-For
 app.set('trust proxy', 1);
 
+// Vercel rewrites deliver the rewrite destination ("/index.js") as req.url
+// on current builds. Each rewrite carries the real request path in the
+// __path query param — restore it so Express routing sees the original URL.
+app.use((req, _res, next) => {
+  const mapped = req.query.__path;
+  if (typeof mapped === 'string' && mapped.length > 0) {
+    req.url = mapped;
+  }
+  next();
+});
+
 // Suppress browser favicon probes (returns 204 No Content).
 app.get(['/favicon.ico', '/favicon.png'], (req, res) => res.status(204).end());
 
